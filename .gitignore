@@ -1,0 +1,9 @@
+.pio/
+.research/
+.venv/
+__pycache__/
+*.pyc
+tests/vtx_host/*.exe
+artifacts/*.npz
+artifacts/*.cf32
+

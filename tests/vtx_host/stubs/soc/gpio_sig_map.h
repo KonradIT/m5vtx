@@ -1,0 +1,2 @@
+#pragma once
+enum {SIG_GPIO_OUT_IDX,U2RXD_IN_IDX,U2TXD_OUT_IDX};
