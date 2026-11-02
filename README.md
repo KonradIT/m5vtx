@@ -4,6 +4,8 @@ Turn your ESP32 M5Stack Basic (v2.7) into a VTX bench debugging tool, it generat
 its DAC (test cards, or silent movies from the SD card) and controls the VTX over
 SmartAudio or Tramp. Allows input from USB serial for automation as well as the screen buttons.
 
+<img width="1448" height="1086" alt="M5VTX bench debugger with real LCD" src="https://github.com/user-attachments/assets/54d1f7d5-fff3-4bc1-b1b1-d14de17d2697" />
+
 ## Hardware
 
 | M5Stack | VTX |
@@ -46,6 +48,8 @@ by PlatformIO at a pinned commit; `tools/vtx_dependency.py` keeps its standalone
 application out of the build. See [tools/VTX_DEPENDENCY.md](tools/VTX_DEPENDENCY.md).
 
 ## First-time setup
+
+<img width="1448" height="1086" alt="M5VTX setup on a test-pattern backdrop" src="https://github.com/user-attachments/assets/710032db-0228-42a6-a7c3-6f9fce03ba5a" />
 
 A board without a VTX configuration shows a setup list instead of the main
 screen, and sends nothing on the control wire until it is done:
