@@ -13,7 +13,10 @@ struct VtxStatus {
   uint16_t powerMilliwatts = 0;  // 0 means not reported/unknown, not RF off.
   int16_t powerIndex = -1;
   int16_t rawPowerIndex = -1;  // Exact GET_SETTINGS byte before SA2 normalization.
-  uint8_t channelIndex = 255;
+  // The power as a vtxtable value: dBm on SmartAudio v2.1, the index on v2 (after
+  // the offset) and v1, milliwatts on Tramp. -1 until read.
+  int32_t powerValue = -1;
+  uint8_t channelIndex = 255;  // SmartAudio's band * 8 + channel; 255 unknown, and always on Tramp.
   int16_t powerDbm = -1;
   bool pitMode = false;
   bool raceLocked = false;
@@ -43,7 +46,7 @@ struct VtxStatus {
   char stateText[64] = "Not started";
 };
 
-// ESP32 half duplex UART transport for RandyReover/VTXControl wire codecs.
+// ESP32 half duplex UART adapter for igorka48/VTXControl_ESP32 wire codecs.
 // Call update frequently. Discovery only sends read commands. Setters queue a
 // command; success means queued, and only later GET replies update status().
 class VtxManager {
@@ -57,22 +60,31 @@ class VtxManager {
   // transport candidates; selection survives pin changes and reprobes.
   bool setProtocol(VtxProtocol protocol);
   VtxProtocol selectedProtocol() const { return selectedProtocol_; }
+  // True once begin() has configured the wire; before that nothing is sent.
+  bool started() const { return uartStarted_; }
+  // Whether a setter would be accepted now: connected, and no command on its way
+  // out or awaiting its readback.
+  bool canSet() const;
   void update();
   void reprobe();
   void requestStatus();
   const VtxStatus& status() const { return status_; }
   bool setFrequency(uint16_t megahertz);
+  // SmartAudio only: band * 8 + channel, as the VTX numbers its own bands.
   bool setChannel(uint8_t index);
   bool setPower(uint16_t milliwatts);
   bool setPowerIndex(uint8_t index);
-  // Restore a previously observed SA2 index range (1..8 choices). The caller
-  // may persist this count; it describes indices only, never guessed RF watts.
+  // A vtxtable power value: dBm on SmartAudio v2.1, the raw byte on v2 and v1,
+  // milliwatts on Tramp.
+  bool setPowerValue(uint16_t value);
+  // How many SA2 power indices to offer (1..8): the specification's four, or what
+  // the caller has observed and persisted. An index read back above it raises it.
+  // It describes indices only, never guessed RF watts.
   bool setKnownPowerCount(uint8_t count);
   // Some SA2 clones report one-based GET power while SET remains zero-based.
   // Configure only for a verified device; changing it discards cached ranges.
   bool setSa2PowerOffset(uint8_t offset);
   bool setPit(bool enabled);
-  static uint16_t channelFrequency(uint8_t index);
   static const char* protocolName(VtxProtocol protocol);
 
  private:
@@ -131,6 +143,5 @@ class VtxManager {
   void acceptedResponse(bool settings);
   bool queueSmartAudio(uint8_t command, const uint8_t* payload, size_t length);
   bool queueTramp(uint8_t command, uint16_t argument);
-  bool canSet() const;
   void message(const char* text);
 };

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// ESP32 transport for the wire codecs from RandyReover/VTXControl.
+// Nonblocking ESP32 transport for igorka48/VTXControl_ESP32 protocol codecs.
 #include "vtx_manager.h"
 
 #include <VTX_SmartAudio.h>
@@ -23,12 +23,6 @@ constexpr uint8_t kAttempts = 2;
 constexpr uint8_t kSaSettingsV1 = SMARTAUDIO_RSP_GET_SETTINGS_V1;
 constexpr uint8_t kSaSettingsV2 = SMARTAUDIO_RSP_GET_SETTINGS_V2;
 constexpr uint8_t kSaSettingsV21 = SMARTAUDIO_RSP_GET_SETTINGS_V21;
-const uint16_t frequencies[] = {
-    5865,5845,5825,5805,5785,5765,5745,5725,
-    5733,5752,5771,5790,5809,5828,5847,5866,
-    5705,5685,5665,5645,5885,5905,5925,5945,
-    5740,5760,5780,5800,5820,5840,5860,5880,
-    5658,5695,5732,5769,5806,5843,5880,5917};
 bool due(uint32_t now, uint32_t at) { return int32_t(now - at) >= 0; }
 uint16_t le16(const uint8_t* p) { return uint16_t(p[0]) | (uint16_t(p[1]) << 8); }
 void hexLog(const char* direction, const uint8_t* bytes, size_t length) {
@@ -90,10 +84,6 @@ const char* VtxManager::protocolName(VtxProtocol protocol) {
     case VtxProtocol::Tramp: return "Tramp";
     default: return "Unknown";
   }
-}
-
-uint16_t VtxManager::channelFrequency(uint8_t index) {
-  return index < 40 ? frequencies[index] : 0;
 }
 
 void VtxManager::message(const char* text) {
@@ -485,14 +475,16 @@ bool VtxManager::parseSmartAudio(const uint8_t* frame, size_t length, size_t pay
   const uint8_t* p = frame + 4;
   const uint16_t frequency = (uint16_t(p[3]) << 8) | p[4];
   if (frequency < 5000 || frequency > 6000 || p[0] >= 64) return false;
-  if (code == kSaSettingsV2 && p[1] < sa2PowerOffset_) return false;
   status_.saVersion = code == kSaSettingsV1 ? 1 : (code == kSaSettingsV2 ? 2 : 21);
   status_.frequencyMHz = frequency;
   status_.channelIndex = p[0] < 40 ? p[0] : 255;
   status_.operationMode = p[2];
   status_.pitMode = (p[2] & 2) != 0;
   status_.rawPowerIndex = p[1];
-  status_.powerIndex = status_.saVersion == 2 ? p[1] - sa2PowerOffset_ : p[1];
+  // A GET below the configured offset means the offset is wrong for this VTX, not
+  // that the reply is: keep the VTX visible and report its lowest level.
+  status_.powerIndex = status_.saVersion != 2 ? p[1] : p[1] >= sa2PowerOffset_ ? p[1] - sa2PowerOffset_ : 0;
+  status_.powerValue = status_.powerIndex;
   status_.powerDbm = -1;
   status_.powerMilliwatts = 0;
   if (status_.saVersion == 2 && status_.powerIndex < 8) {
@@ -503,6 +495,7 @@ bool VtxManager::parseSmartAudio(const uint8_t* frame, size_t length, size_t pay
   }
   if (status_.saVersion == 21 && payloadLength >= 7) {
     status_.powerDbm = p[5];
+    status_.powerValue = p[5];
     status_.powerMilliwatts = dbmToMw(p[5]);
     status_.powerCount = 0;
     const size_t reported = size_t(p[6]) + 1; // Many devices report N + a 0dBm pit entry.
@@ -536,10 +529,10 @@ bool VtxManager::parseTramp(const uint8_t* frame) {
   if (frequency < 5000 || frequency > 6000 || power > 20000 || frame[7] > 1) return false;
   status_.frequencyMHz = frequency;
   status_.powerMilliwatts = power;
+  status_.powerValue = power;
   status_.pitMode = frame[7] != 0;
   status_.raceLocked = (frame[6] & 1) != 0;
-  status_.channelIndex = 255;
-  for (uint8_t i = 0; i < 40; ++i) if (frequencies[i] == frequency) { status_.channelIndex = i; break; }
+  status_.channelIndex = 255;  // Tramp has no channel numbers, only frequencies.
   acceptedResponse(true);
   return true;
 }
@@ -592,9 +585,21 @@ bool VtxManager::setFrequency(uint16_t megahertz) {
 }
 
 bool VtxManager::setChannel(uint8_t index) {
-  if (index >= 40) return false;
-  if (status_.protocol == VtxProtocol::Tramp) return setFrequency(frequencies[index]);
+  // SmartAudio's channel byte is band * 8 + channel over the bands the VTX has;
+  // its settings reply refuses anything from 64 up. Tramp takes only frequencies.
+  if (index >= 64 || status_.protocol != VtxProtocol::SmartAudio) return false;
   return queueSmartAudio(SMARTAUDIO_CMD_SET_CHANNEL, &index, 1);
+}
+
+bool VtxManager::setPowerValue(uint16_t value) {
+  if (status_.protocol == VtxProtocol::Tramp) return setPower(value);
+  if (status_.protocol != VtxProtocol::SmartAudio) return false;
+  uint8_t byte = uint8_t(value);
+  if (status_.saVersion == 21) {
+    if (value >= 128) return false;
+    byte = 0x80 | uint8_t(value);
+  } else if (value > 255) return false;
+  return queueSmartAudio(SMARTAUDIO_CMD_SET_POWER, &byte, 1);
 }
 
 bool VtxManager::setPower(uint16_t milliwatts) {
@@ -627,9 +632,11 @@ bool VtxManager::setPowerIndex(uint8_t index) {
 
 bool VtxManager::setKnownPowerCount(uint8_t count) {
   if (!count || count > 8) return false;
-  if (sa2KnownCount_ < count) sa2KnownCount_ = count;
-  if (status_.protocol == VtxProtocol::SmartAudio && status_.saVersion == 2)
+  sa2KnownCount_ = count;
+  if (status_.protocol == VtxProtocol::SmartAudio && status_.saVersion == 2) {
+    if (status_.powerIndex >= 0 && status_.powerIndex >= sa2KnownCount_) sa2KnownCount_ = status_.powerIndex + 1;
     status_.powerCount = sa2KnownCount_;
+  }
   return true;
 }
 

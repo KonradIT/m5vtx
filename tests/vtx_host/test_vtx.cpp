@@ -68,9 +68,11 @@ static void testProtocolSelectionAndTramp() {
   assert(selected.status().connected && selected.status().frequencyMHz==5805);
   assert(selected.status().powerMilliwatts==25 && !selected.status().pitMode);
   assert(!selected.setFrequency(5660) && !selected.setFrequency(5950));
-  assert(!selected.setChannel(32)); // R1 lies below the advertised lower limit.
+  assert(!selected.setFrequency(5658)); // R1 lies below the advertised lower limit.
   assert(!selected.setPower(0) && !selected.setPower(801));
   assert(!selected.setPowerIndex(1)); // SA index commands do not apply to Tramp.
+  assert(!selected.setChannel(36)); // Nor channel numbers: Tramp takes frequencies.
+  assert(!selected.setPowerValue(801) && !selected.setPowerValue(0)); // mW on Tramp, within its limits.
 
   const auto completeWrite=[&](uint8_t command,uint16_t argument,const std::vector<uint8_t>& reply) {
     const uint32_t before=selected.status().validResponses;
@@ -86,13 +88,14 @@ static void testProtocolSelectionAndTramp() {
     inject(selected,reply); selected.update();
     assert(selected.status().validResponses==before+1);
   };
-  assert(selected.setPower(400));
+  assert(selected.status().powerValue==25);
+  assert(selected.setPowerValue(400)); // A vtxtable power value is milliwatts on Tramp.
   assert(selected.status().powerMilliwatts==25);
   completeWrite('P',400,tramp('v',{0xad,0x16,0x90,1,0,0}));
-  assert(selected.status().powerMilliwatts==400);
-  assert(selected.setChannel(36));
+  assert(selected.status().powerMilliwatts==400 && selected.status().powerValue==400);
+  assert(selected.setFrequency(5806));
   completeWrite('F',5806,tramp('v',{0xae,0x16,0x90,1,0,0}));
-  assert(selected.status().channelIndex==36 && selected.status().frequencyMHz==5806);
+  assert(selected.status().channelIndex==255 && selected.status().frequencyMHz==5806);
   assert(selected.setPit(true));
   completeWrite('I',0,tramp('v',{0xae,0x16,0x90,1,0,1}));
   assert(selected.status().pitMode);
@@ -101,7 +104,7 @@ static void testProtocolSelectionAndTramp() {
   assert(!selected.status().pitMode);
   inject(selected,tramp('v',{0xae,0x16,0x90,1,1,0}));
   assert(selected.status().raceLocked);
-  assert(!selected.setPower(25) && !selected.setChannel(37) && !selected.setPit(true));
+  assert(!selected.setPower(25) && !selected.setFrequency(5843) && !selected.setPit(true));
 
   // Switching clears old settings and queued writes, and retains the new family
   // over reprobe/begin/pin changes without falling through to another protocol.
@@ -182,7 +185,7 @@ int main() {
   inject(vtx,settings);
   assert(vtx.status().connected && !vtx.status().probing);
   assert(vtx.status().frequencyMHz==5805 && vtx.status().powerMilliwatts==25);
-  assert(vtx.status().channelIndex==3);
+  assert(vtx.status().channelIndex==255 && vtx.status().powerValue==25);
   assert(!vtx.setPower(1600) && !vtx.setFrequency(6100));
   vtx.update();
   assert(vtx.setFrequency(5840));
@@ -209,22 +212,32 @@ int main() {
   assert(vtx.status().connected && vtx.status().saVersion==2);
   assert(vtx.status().pitMode && vtx.status().frequencyMHz==5805);
   assert(vtx.status().powerIndex==2 && vtx.status().powerMilliwatts==0);
-  assert(vtx.status().powerCount==3);
+  assert(vtx.status().powerCount==3 && vtx.status().powerValue==2);
   assert(!vtx.setPower(800) && !vtx.setPit(true));
   assert(vtx.setPowerIndex(1));
   inject(vtx,sa(9,{3,0,0,0x16,0xad}));
   assert(vtx.status().powerIndex==0 && vtx.status().powerCount==3);
+  // A vtxtable power value on v2 is the raw SET byte; beyond the channel byte's
+  // 64 values the settings reply would be refused, so the command is.
+  vtx.pendingLength_=0;
+  assert(vtx.setPowerValue(3) && vtx.pending_[5]==3);
+  vtx.pendingLength_=0;
+  assert(!vtx.setPowerValue(256) && vtx.setChannel(63) && !vtx.setChannel(64));
 
   vtx.reprobe(); vtx.configure({VtxProtocol::SmartAudio,4900,false});
   // v2.1 advertises 0dBm pit,14dBm/20dBm/26dBm levels.
   inject(vtx,sa(0x11,{3,1,0,0x16,0xad,20,3,0,14,20,26}));
   assert(vtx.status().saVersion==21 && vtx.status().powerCount==3);
   assert(vtx.status().powerLevelsDbm[0]==14 && vtx.status().powerIndex==1);
-  assert(vtx.status().powerMilliwatts==100);
+  assert(vtx.status().powerMilliwatts==100 && vtx.status().powerValue==20);
   assert(vtx.setPower(25));
   assert(vtx.pending_[5]==(0x80|14));
   vtx.pendingLength_=0;
   assert(vtx.setPit(true)); assert(vtx.pending_[5]==0x80);
+  vtx.pendingLength_=0;
+  assert(vtx.setPowerValue(26) && vtx.pending_[5]==(0x80|26)); // dBm on v2.1
+  vtx.pendingLength_=0;
+  assert(!vtx.setPowerValue(128));
 
   // Published TBS rev09 vectors (response length includes CRC).
   vtx.reprobe(); vtx.configure({VtxProtocol::SmartAudio,4800,false});
@@ -326,7 +339,7 @@ int main() {
   assert(darwin.setKnownPowerCount(3));
   darwin.begin(16);
   inject(darwin,sa(9,{36,3,0,0x16,0xae}));
-  assert(darwin.status().rawPowerIndex==3 && darwin.status().powerIndex==2);
+  assert(darwin.status().rawPowerIndex==3 && darwin.status().powerIndex==2 && darwin.status().powerValue==2);
   assert(darwin.status().powerCount==3 && !darwin.setPowerIndex(3));
   assert(darwin.setPowerIndex(1));
   assert(darwin.pending_[5]==1); // SET wire value stays zero-based.
@@ -334,10 +347,14 @@ int main() {
   inject(darwin,sa(9,{36,2,0,0x16,0xae}));
   assert(darwin.status().rawPowerIndex==2 && darwin.status().powerIndex==1);
   assert(darwin.status().powerCount==3);
-  inject(darwin,sa(9,{36,0,0,0x16,0xae})); // Invalid below configured GET offset.
+  // Below the configured GET offset: the offset is wrong for this VTX, which stays
+  // visible at its lowest level rather than vanishing.
+  inject(darwin,sa(9,{36,0,0,0x16,0xae}));
+  assert(darwin.status().rawPowerIndex==0 && darwin.status().powerIndex==0 && darwin.status().connected);
+  inject(darwin,sa(9,{36,2,0,0x16,0xae}));
   assert(darwin.status().rawPowerIndex==2 && darwin.status().powerIndex==1);
   assert(darwin.setPowerIndex(2));
   assert(darwin.pending_[5]==2);
   testProtocolSelectionAndTramp();
-  puts("VTX host tests passed: CRC/echo, SA versions, Tramp limits/settings/pit/lock, readback, forced protocol switching, bounded filtered discovery");
+  puts("VTX host tests passed: CRC/echo, SA versions, Tramp limits/settings/pit/lock, vtxtable power values, readback, forced protocol switching, bounded filtered discovery");
 }

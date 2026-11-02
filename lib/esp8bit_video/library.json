@@ -1,0 +1,8 @@
+{
+  "name": "esp8bit_video",
+  "version": "1.0.0",
+  "description": "Interlaced NTSC and PAL composite video on DAC2, adapted from rossumur/esp_8_bit video_out.h",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "license": "ISC"
+}

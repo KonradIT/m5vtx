@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fatshark-sweep-script
+expected_outcome: |
+  Writes a sweep around m5vtxctl tune that treats a non-confirmed step as not retuned, restores the starting state, and raises the RF cautions.
