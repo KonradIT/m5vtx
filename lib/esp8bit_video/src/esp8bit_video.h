@@ -164,7 +164,9 @@ inline __attribute__((always_inline)) void sample(uint16_t* dst, int index, uint
 // Two equal samples per store keep ISR work comfortably below a scanline.
 inline __attribute__((always_inline)) void fill(uint16_t* dst, int from, int to, uint16_t value) {
   if (from & 1) sample(dst, from++, value);
-  uint32_t* pairs = reinterpret_cast<uint32_t*>(dst);
+  // These stores land in uint16_t samples: without may_alias the optimizer can move them.
+  typedef uint32_t __attribute__((may_alias)) SamplePair;
+  SamplePair* pairs = reinterpret_cast<SamplePair*>(dst);
   const uint32_t pair = (static_cast<uint32_t>(value) << 16) | value;
   for (int i = from / 2; i < to / 2; ++i) pairs[i] = pair;
   if (to & 1) sample(dst, to - 1, value);

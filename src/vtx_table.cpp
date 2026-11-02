@@ -47,7 +47,7 @@ void copyUpper(char* out, size_t size, const char* text) {
   out[i] = 0;
 }
 
-char errorText[64];
+char errorText[96];
 const char* error(const char* format, int value) {
   snprintf(errorText, sizeof(errorText), format, value);
   return errorText;

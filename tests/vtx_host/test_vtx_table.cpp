@@ -88,6 +88,7 @@ int main() {
                           {"channels -1", "CHANNEL COUNT NOT BETWEEN 0 AND 8"}, {"powerlevels 9", "POWER LEVEL COUNT NOT BETWEEN 0 AND 8"},
                           {"band 7 X X FACTORY 1 2 3 4 5 6 7 8", "BAND NUMBER NOT BETWEEN 1 AND 6"},
                           {"band 1 OK X BOGUS 1 2 3 4 5 6 7 8", "INVALID FACTORY FLAG BOGUS (EXPECTED FACTORY OR CUSTOM)"},
+                          {"band 1 OK X ABCDEFGHIJKLMNOPQRSTUVWXYZ01234 1 2 3 4 5 6 7 8", "INVALID FACTORY FLAG ABCDEFGHIJKLMNOPQRSTUVWXYZ01234 (EXPECTED FACTORY OR CUSTOM)"},
                           {"band 1 OK X CUSTOM 1 2 3 4 5 6 7", "NOT ENOUGH FREQUENCIES (EXPECTED 8)"},
                           {"band 1 OK X CUSTOM 1 2 3 4 5 6 7 8 9", "TOO MANY FREQUENCIES (EXPECTED 8)"},
                           {"band 1 OK X CUSTOM 1 2 3 four 5 6 7 8", "INVALID FREQUENCY four"},
