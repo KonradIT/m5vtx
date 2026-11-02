@@ -26,7 +26,17 @@ framing, idle level, dummy bytes) and accepts only CRC-valid replies.
 
 ## Flash
 
-Download .bin from releases, use https://espflash.app to flash.
+Download the `.factory.bin` from [releases](https://github.com/KonradIT/m5vtx/releases)
+and flash it with https://espflash.app in desktop Chrome or Edge. It holds the
+bootloader, partition table and application, and goes at 0x0.
+
+Flashing it erases the settings stored on the board: the vtxtable, protocol, control
+pin and SmartAudio v2 offset. Save the table first with `m5vtxctl send vtxtable`, then
+go through [first-time setup](#first-time-setup) again. `pio run --target upload`
+keeps them.
+
+The Build firmware workflow makes the releases. Run it from the Actions tab: it runs
+the tests, builds the firmware and publishes the image under the tag `firmware-<commit>`.
 
 ## Build locally
 
@@ -307,10 +317,6 @@ is probed first.
   480 of 480 rows at 30 frames/s, no vertical slips, 10..20 ns sync jitter, burst
   locked; the test card's bars fit the expected hues within a few degrees. An
   SD movie played with no late rows or vertical misses.
-- The SMPTE and PM5544 cards and the PAL raster are verified on the host only,
-  against the firmware's real renderers and the C5VRX grabber code; neither has
-  been received over RF yet, and the chroma gain was measured at 3.58 MHz, not
-  at PAL's 4.43 MHz.
 - Tramp is verified against wire fixtures only; no Tramp transmitter was
   connected.
 

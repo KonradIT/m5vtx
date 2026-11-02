@@ -1,0 +1,123 @@
+name: Build firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  BOARD_ENV: m5stack-basic-v27
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Install PlatformIO Core
+        # The platform and libraries are pinned in platformio.ini.
+        run: python -m pip install platformio==6.2.0
+
+      - name: Tools and host tests
+        run: make test
+
+      - name: Build firmware
+        run: pio run --environment "$BOARD_ENV"
+
+      - name: VTX host test
+        # Needs the pinned VTXControl_ESP32 headers from the build.
+        run: make vtx-host-test
+
+      - name: Package factory image
+        run: |
+          IMAGE="m5vtx-m5stack-basic-${GITHUB_SHA::7}.factory.bin"
+          SEGMENTS="$RUNNER_TEMP/segments"
+          mkdir -p build/firmware
+          # The files and offsets that pio run --target upload writes.
+          pio project metadata --environment "$BOARD_ENV" --json-output | jq -r --arg env "$BOARD_ENV" '
+            .[$env] | (.extra.flash_images[] | "\(.offset) \(.path)"),
+            "\(.extra.application_offset) \(.prog_path | sub("[.]elf$"; ".bin"))"' > "$SEGMENTS"
+          ARGS=()
+          while read -r OFFSET FILE; do ARGS+=("$OFFSET" "$FILE"); done < "$SEGMENTS"
+          pio pkg exec --package tool-esptoolpy -- esptool.py --chip esp32 merge_bin \
+            --output "build/firmware/$IMAGE" "${ARGS[@]}"
+          while read -r OFFSET FILE; do
+            cmp --bytes="$(stat -c %s "$FILE")" --ignore-initial="$((OFFSET)):0" "build/firmware/$IMAGE" "$FILE"
+          done < "$SEGMENTS"
+          (cd build/firmware && sha256sum "$IMAGE" > "$IMAGE.sha256")
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: m5vtx-firmware
+          path: build/firmware/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download image
+        uses: actions/download-artifact@v8
+        with:
+          name: m5vtx-firmware
+          path: build/firmware
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="firmware-$SHORT_SHA"
+          IMAGE="m5vtx-m5stack-basic-$SHORT_SHA.factory.bin"
+          (cd build/firmware && sha256sum --check "$IMAGE.sha256")
+          cat > build/release-notes.md <<EOF
+          M5VTX firmware for the M5Stack Basic v2.7 (classic ESP32, 16 MB flash), from commit $GITHUB_SHA. Not for the S3 or a PSRAM Fire.
+
+          Flash **$IMAGE** with https://espflash.app in desktop Chrome or Edge, with any serial monitor closed. It holds the bootloader, partition table and application, and goes at **0x0**. The .sha256 file verifies the download.
+
+          **Flashing erases the settings stored on the board:** the vtxtable, protocol, control pin and SmartAudio v2 offset. Save the table first with \`m5vtxctl send vtxtable\`, then go through [first-time setup](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/README.md#first-time-setup) again.
+          EOF
+          # Reruns replace the assets in place.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" build/firmware/* --clobber
+            gh release edit "$TAG" --title "M5VTX firmware $SHORT_SHA" \
+              --notes-file build/release-notes.md --prerelease="$PRERELEASE"
+          else
+            FLAGS=()
+            if [ "$PRERELEASE" = true ]; then FLAGS+=(--prerelease); fi
+            gh release create "$TAG" build/firmware/* \
+              --title "M5VTX firmware $SHORT_SHA" \
+              --notes-file build/release-notes.md \
+              --target "$GITHUB_SHA" "${FLAGS[@]}"
+          fi
