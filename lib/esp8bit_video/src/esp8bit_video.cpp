@@ -227,9 +227,9 @@ void cleanup() {
 }
 }
 
-bool begin(uint8_t* frontRgb332, uint8_t* backRgb332) {
+bool begin(uint8_t* frontRgb332, uint8_t* backRgb332, int dacPin) {
     if (started) return true;
-    if (!frontRgb332 || !backRgb332 || frontRgb332 == backRgb332 ||
+    if ((dacPin != 25 && dacPin != 26) || !frontRgb332 || !backRgb332 || frontRgb332 == backRgb332 ||
         !esp_ptr_internal(frontRgb332) || !esp_ptr_internal(backRgb332) ||
         rtc_clk_xtal_freq_get() != RTC_XTAL_FREQ_40M) return false;
     exchange.reset(frontRgb332, backRgb332);
@@ -273,9 +273,10 @@ bool begin(uint8_t* frontRgb332, uint8_t* backRgb332) {
     I2S0.clkm_conf.clka_en = 1;
     I2S0.fifo_conf.tx_fifo_mod = 1;
 
-    // DAC1 is connected to the M5Stack speaker. Only DAC2/GPIO26 is powered.
+    // Mono: both I2S channels carry the raster, and only the chosen DAC is powered.
+    // DAC1 is the M5Stack Basic's speaker, so that board uses DAC2/GPIO26.
     i2s_set_dac_mode(I2S_DAC_CHANNEL_DISABLE);
-    if (i2s_set_dac_mode(I2S_DAC_CHANNEL_LEFT_EN) != ESP_OK) {
+    if (i2s_set_dac_mode(dacPin == 25 ? I2S_DAC_CHANNEL_RIGHT_EN : I2S_DAC_CHANNEL_LEFT_EN) != ESP_OK) {
         cleanup(); return false;
     }
     I2S0.int_clr.val = 0xFFFFFFFF;

@@ -16,6 +16,10 @@ uint32_t mockMillis = 0;
 MockConsole Serial;
 MockGpioRegisters GPIO;
 MockGpioTrace mockGpioTrace;
+// The board's first two control pins: GPIO16 and GPIO17 on the Basic, G0 and G32 on
+// the StickC Plus2, whose output enable is in the second register.
+static_assert(Board::controlPinCount >= 2, "Pin switching needs two control pins");
+const int pinA = Board::controlPins[0], pinB = Board::controlPins[1];
 
 static void inject(VtxManager& vtx, const std::vector<uint8_t>& bytes) {
   for (uint8_t byte : bytes) vtx.uart_.incoming.push_back(byte);
@@ -42,7 +46,7 @@ static void testProtocolSelectionAndTramp() {
   assert(!selected.uartStarted_ && selected.selectedProtocol()==VtxProtocol::Tramp);
   assert(!selected.setProtocol(static_cast<VtxProtocol>(99)));
   assert(selected.selectedProtocol()==VtxProtocol::Tramp);
-  selected.begin(16);
+  selected.begin(pinA);
   assert(selected.activeProtocol_==VtxProtocol::Tramp && selected.status().probeCount==3);
   assert(selected.status().baud==9600 && selected.status().stopBits==1);
   assert(selected.status().protocol==VtxProtocol::Unknown && !selected.status().connected);
@@ -121,11 +125,11 @@ static void testProtocolSelectionAndTramp() {
   assert(selected.setProtocol(VtxProtocol::Tramp));
   assert(selected.pendingLength_==0 && !selected.verifyPending_);
   assert(selected.status().frequencyMHz==0 && !selected.status().connected);
-  assert(selected.setPin(17) && selected.selectedProtocol()==VtxProtocol::Tramp);
+  assert(selected.setPin(pinB) && selected.selectedProtocol()==VtxProtocol::Tramp);
   assert(selected.activeProtocol_==VtxProtocol::Tramp && selected.status().probeCount==3);
   selected.reprobe();
   assert(selected.activeProtocol_==VtxProtocol::Tramp && selected.status().probeCount==3);
-  selected.begin(16);
+  selected.begin(pinA);
   assert(selected.activeProtocol_==VtxProtocol::Tramp && selected.selectedProtocol()==VtxProtocol::Tramp);
 
   // Exhaust each forced family. All emitted discovery frames remain read-only,
@@ -133,7 +137,7 @@ static void testProtocolSelectionAndTramp() {
   // into the other family even when the transmitter is silent.
   for(VtxProtocol family : {VtxProtocol::Tramp,VtxProtocol::SmartAudio}) {
     VtxManager silent;
-    assert(silent.setProtocol(family)); silent.begin(16);
+    assert(silent.setProtocol(family)); silent.begin(pinA);
     const uint8_t count=silent.status().probeCount;
     for(int i=0;i<1000 && silent.status().probing;++i) {
       mockMillis+=800; silent.update();
@@ -162,7 +166,7 @@ static void testProtocolSelectionAndTramp() {
 int main() {
   assert(sa_CRC8("\xAA\x55\x03\x00",4)==0x9f);
   VtxManager vtx;
-  vtx.begin(17);
+  vtx.begin(pinB);
   assert(vtx.status().probing && !vtx.status().connected);
   assert(vtx.activeProtocol_==VtxProtocol::SmartAudio && vtx.status().transportProfile==4);
   vtx.configure({VtxProtocol::Tramp,9600,false});
@@ -260,7 +264,7 @@ int main() {
   vtx.reprobe(); vtx.configure({VtxProtocol::SmartAudio,4800,false,4});
   vtx.sendQuery();
   assert(vtx.lastTxLength_==7 && vtx.lastTx_[0]==0 && vtx.lastTx_[6]==0);
-  assert(mockGpioTrace.pulls[17]==GPIO_FLOATING);
+  assert(mockGpioTrace.pulls[pinB]==GPIO_FLOATING);
   inject(vtx,sa(9,{36,3,0,0x16,0xae}));
   assert(vtx.setPowerIndex(2));
   assert(vtx.pendingLength_==8 && vtx.pending_[0]==0 && vtx.pending_[7]==0);
@@ -277,27 +281,30 @@ int main() {
   for(int i=0;i<16 && vtx.status().connected;++i) { mockMillis+=500; vtx.update(); }
   assert(!vtx.status().connected);
 
+  // Before begin() there is no wire, and a reprobe sends nothing.
+  VtxManager idle; idle.reprobe();
+  assert(idle.pin()==-1 && !idle.started() && !idle.status().probing);
   // A complete discovery run with no incoming bytes stops boundedly.
-  VtxManager absent; absent.begin(17);
+  VtxManager absent; absent.begin(pinB);
   for(int i=0;i<1000 && absent.status().probing;++i) { mockMillis+=500; absent.update(); }
   assert(!absent.status().probing && !absent.status().connected);
   assert(absent.status().queries==absent.status().probeCount*2);
   // A runtime pin switch must release the previous wire and clear old state.
-  assert(absent.pin()==17);
-  assert(absent.setPin(16));
-  assert(absent.pin()==16 && absent.status().probing);
-  assert(mockGpioTrace.directions[17]==GPIO_MODE_INPUT);
-  assert(mockGpioTrace.pulls[17]==GPIO_FLOATING);
+  assert(absent.pin()==pinB);
+  assert(absent.setPin(pinA));
+  assert(absent.pin()==pinA && absent.status().probing);
+  assert(mockGpioTrace.directions[pinB]==GPIO_MODE_INPUT);
+  assert(mockGpioTrace.pulls[pinB]==GPIO_FLOATING);
   assert(absent.status().validResponses==0 && absent.responseEdges_==0);
-  assert(!absent.setPin(26) && absent.pin()==16);
-  absent.begin(17);
-  assert(absent.pin()==17);
-  assert(mockGpioTrace.directions[16]==GPIO_MODE_INPUT);
-  assert(mockGpioTrace.pulls[16]==GPIO_FLOATING);
+  assert(!absent.setPin(Board::videoPin) && absent.pin()==pinA);
+  absent.begin(pinB);
+  assert(absent.pin()==pinB);
+  assert(mockGpioTrace.directions[pinA]==GPIO_MODE_INPUT);
+  assert(mockGpioTrace.pulls[pinA]==GPIO_FLOATING);
   VtxManager remembered;
   assert(remembered.setKnownPowerCount(4));
   assert(!remembered.setKnownPowerCount(0) && !remembered.setKnownPowerCount(9));
-  remembered.begin(16);
+  remembered.begin(pinA);
   inject(remembered,sa(9,{36,0,0,0x16,0xae}));
   assert(remembered.status().powerCount==4 && remembered.setPowerIndex(3));
   remembered.reprobe();
@@ -306,7 +313,7 @@ int main() {
 
   // A real response arriving at500ms remains inside the extended reply window.
   VtxManager delayed;
-  delayed.begin(16);
+  delayed.begin(pinA);
   mockMillis+=60; delayed.update();
   mockMillis+=500; delayed.update();
   assert(delayed.waiting_ && delayed.misses_==0);
@@ -337,7 +344,7 @@ int main() {
   assert(darwin.sa2KnownCount_==0);
   assert(!darwin.setSa2PowerOffset(2));
   assert(darwin.setKnownPowerCount(3));
-  darwin.begin(16);
+  darwin.begin(pinA);
   inject(darwin,sa(9,{36,3,0,0x16,0xae}));
   assert(darwin.status().rawPowerIndex==3 && darwin.status().powerIndex==2 && darwin.status().powerValue==2);
   assert(darwin.status().powerCount==3 && !darwin.setPowerIndex(3));

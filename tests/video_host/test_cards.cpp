@@ -29,7 +29,7 @@ bool pal = false;
 int restarts = 0;
 }
 
-bool begin(uint8_t* front, uint8_t* back) {
+bool begin(uint8_t* front, uint8_t* back, int) {
     exchange.reset(front, back);
     palettes[0].assign(nullptr);
     palettes[1].assign(nullptr);

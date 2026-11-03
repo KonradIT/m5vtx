@@ -1,24 +1,41 @@
 # M5VTX - VTX bench debugger
 
-Turn your ESP32 M5Stack Basic (v2.7) into a VTX bench debugging tool, it generates composite video on
-its DAC (test cards, or silent movies from the SD card) and controls the VTX over
+Turn your ESP32 M5Stack Basic (v2.7) or M5StickC Plus2 into a VTX bench debugging tool, it generates composite video on
+its DAC (test cards, or on the Basic silent movies from the SD card) and controls the VTX over
 SmartAudio or Tramp. Allows input from USB serial for automation as well as the screen buttons.
 
 <img width="1448" height="1086" alt="M5VTX bench debugger with real LCD" src="https://github.com/user-attachments/assets/54d1f7d5-fff3-4bc1-b1b1-d14de17d2697" />
 
 ## Hardware
 
-| M5Stack | VTX |
-| --- | --- |
-| GPIO26 / DAC2 | Composite video input |
-| GPIO16 (or GPIO17, selectable on screen) | SmartAudio / Tramp control wire |
-| 5V | 5V supply |
-| GND | GND |
+Each board has its own firmware image and PlatformIO environment:
+
+| | M5Stack Basic v2.7 | M5StickC Plus2 |
+| --- | --- | --- |
+| Composite video, to the VTX's video input | GPIO26 / DAC2 | G26 / DAC2, HAT header |
+| SmartAudio / Tramp control wire | GPIO16, or GPIO17 | G0 on the HAT header, or G32 or G33 on the Grove port |
+| VTX supply | 5V and GND | 5V OUT and GND, HAT header |
+| SD movies | microSD slot | none, no card slot |
+| Screen | 320x240, every row | 135x240 in landscape, four rows that scroll |
 
 The video engine uses the classic ESP32's internal DAC and I2S0 DMA, so this is
-for the ESP32 Basic only, **not the S3 or a PSRAM Fire.** GPIO25 is the Basic's
+for these ESP32 boards only, **not the S3 or a PSRAM Fire.** GPIO25 is the Basic's
 speaker pin: the speaker is left disabled and DAC1 off, and video uses DAC2
-alone. The control pin choice is stored in NVS.
+alone. The control pin is chosen on the screen or with `pin N`, and stored in NVS.
+
+On the StickC Plus2 one HAT header has all four wires: GND, 5V OUT, G26 and G0.
+G0 is also the microphone's clock, which stays off, and a boot strapping pin: the
+stick starts in download mode if G0 is low when it resets, so a VTX that holds its
+control line low then needs G32 or G33 instead. GPIO16 and GPIO17 are taken by
+the stick's PSRAM. Power the VTX from 5V OUT only if its draw suits the stick's
+battery and USB supply; otherwise give it its own 5V with a common ground. The
+buzzer on GPIO2 stays off.
+
+A board's features and wiring are build flags of its environment in
+`platformio.ini`, checked by [include/board.h](include/board.h): `M5VTX_BOARD`,
+`M5VTX_HAS_SD`, `M5VTX_VIDEO_DAC_GPIO` (25 or 26), `M5VTX_CONTROL_PINS` and
+`M5VTX_CONTROL_PIN_DEFAULT`. On the StickC Plus2, `-DM5VTX_VIDEO_DAC_GPIO=25` moves
+the video to G25, which shares its header pin with the input-only G36.
 
 Any SmartAudio v1, v2 or v2.1 VTX, or a Tramp one, should work: the controller
 speaks the protocols generically, probes a range of transport variants (baud,
@@ -26,9 +43,11 @@ framing, idle level, dummy bytes) and accepts only CRC-valid replies.
 
 ## Flash
 
-Download the `.factory.bin` from [releases](https://github.com/KonradIT/m5vtx/releases)
+Download the `.factory.bin` for your board from [releases](https://github.com/KonradIT/m5vtx/releases),
+`m5vtx-m5stack-basic-<commit>.factory.bin` or `m5vtx-m5stickc-plus2-<commit>.factory.bin`,
 and flash it with https://espflash.app in desktop Chrome or Edge. It holds the
-bootloader, partition table and application, and goes at 0x0.
+bootloader, partition table and application, and goes at 0x0. Firmware for the
+other board says so on the screen.
 
 Flashing it erases the settings stored on the board: the vtxtable, protocol, control
 pin and SmartAudio v2 offset. Save the table first with `m5vtxctl send vtxtable`, then
@@ -36,7 +55,8 @@ go through [first-time setup](#first-time-setup) again. `pio run --target upload
 keeps them.
 
 The Build firmware workflow makes the releases. Run it from the Actions tab: it runs
-the tests, builds the firmware and publishes the image under the tag `firmware-<commit>`.
+the tests, builds the firmware for both boards and publishes the images under the tag
+`firmware-<commit>`.
 
 ## Build locally
 
@@ -49,6 +69,9 @@ pio run
 pio run --target upload
 pio device monitor
 ```
+
+That is the Basic, `m5stack-basic-v27`, the default environment. For the StickC
+Plus2, add `-e m5stickc-plus2`: `pio run -e m5stickc-plus2 --target upload`.
 
 PlatformIO picks the serial port by itself; pass `--upload-port COMx` or set
 `upload_port` in `platformio.ini` to pin it. Upload is 460800 baud, the monitor
@@ -74,7 +97,7 @@ SETUP
 The first two are ticked once a [vtxtable](#vtx-table) with bands and with
 power levels has been entered over USB serial and saved. The protocol is the
 one item set on the board: button B and C choose SmartAudio or Tramp, holding C saves
-it and ticks it (`protocol smartaudio`, `protocol tramp` or `protocol auto` over
+it and ticks it (on the StickC Plus2, B or the power button chooses and holding A saves) (`protocol smartaudio`, `protocol tramp` or `protocol auto` over
 serial do the same). With all three ticked the main screen appears and
 discovery starts. `defaults` over serial clears the vtxtable, protocol and
 `sa2-offset` from NVS and restarts into setup; the control pin stays.
@@ -85,6 +108,20 @@ The top line shows what the VTX reports: protocol, frequency and power. A queued
 command is not confirmation; an edit stays marked until a later settings reply
 matches it, or the screen says the confirmation timed out. Discovery sends only
 queries and changes nothing on the VTX.
+
+The buttons are the Basic's; the StickC Plus2's three stand in for them:
+
+| Basic | StickC Plus2 | Action |
+| --- | --- | --- |
+| A | A, the front button | Next row |
+| B | Power button | Decrease |
+| C | B, the side button | Increase |
+| Hold B | Hold B | Repeat discovery |
+| Hold C | Hold A | Apply |
+
+The power button is only ever clicked, since a long press turns the stick off. The
+stick's screen holds four of the seven rows and scrolls to keep the selected one
+in view.
 
 - A: select the next row.
 - B / C: decrease / increase the selected value. An asterisk marks an edit.
@@ -100,11 +137,12 @@ queries and changes nothing on the VTX.
 - Pit mode: Tramp on/off, SmartAudio v2 exit only, v2.1 on/off.
 - Protocol: SmartAudio or Tramp; hold C to save it and reconnect. Each probes
   only its own transport variants (34 for SmartAudio, 3 for Tramp).
-- Image: a built-in test card, or a movie from the SD card. Movies start at once;
-  hold C to restart one. The last entry, Rescan SD, re-reads the card when held.
+- Image: a built-in test card, or on the Basic a movie from the SD card. Movies start
+  at once; hold C to restart one. The last entry, Rescan SD, re-reads the card when held.
   Selecting **Philips PM5544 PAL** switches the output to PAL; an NTSC-only
   receiver loses the picture until another image is selected.
-- Control pin: GPIO16 or GPIO17; hold C to store it and probe.
+- Control pin: GPIO16 or GPIO17 on the Basic, G0, G32 or G33 on the StickC Plus2;
+  hold C to store it and probe.
 
 The LCD redraws only rows that changed, through a small off-screen buffer, so
 nothing flashes. SD and LCD share the SPI bus under a mutex; LCD updates defer
@@ -117,15 +155,15 @@ reported every five seconds; all VTX traffic is logged as hex.
 
 | Command | Effect |
 | --- | --- |
-| `status`, `media` | Report now; `media` also lists the movie catalog |
+| `status`, `media` | Report now; `media` also lists the movie catalog. Without a card slot, `MEDIA` says so |
 | `probe`, `query` | Repeat discovery; ask for settings now |
 | `protocol smartaudio`, `protocol tramp`, `protocol auto` | Select the protocol; `auto` probes all 37 variants |
-| `pin 16`, `pin 17` | Select and probe the control pin |
+| `pin N` | Select and probe the control pin: 16 or 17 on the Basic, 0, 32 or 33 on the StickC Plus2 |
 | `vtxtable ...`, `set vtx_band = N`, `set vtx_channel = N`, `set vtx_power = N`, `get vtx`, `save`, `diff`, `defaults` | Betaflight's VTX configuration, see [VTX table](#vtx-table) |
 | `freq MHz`, `power mW`, `power-index N`, `pit 0/1` | Set a frequency, Tramp power, a SmartAudio power index, or pit mode directly |
 | `sa2-offset 0/1` | SmartAudio v2 device setting, see [Device notes](#device-notes) |
-| `pattern 0..4`, `image N`, `play N`, `sdscan` | Select a built-in image, any image, movie N, or rescan the card |
-| `button a/b/c/holdc/holdb` | The UI handlers, over USB |
+| `pattern 0..4`, `image N`, `play N`, `sdscan` | Select a built-in image, any image, movie N, or rescan the card; the last two are an error without a card slot |
+| `button a/b/c/holdc/holdb` | The UI handlers, over USB, by the Basic's button names on either board |
 
 Setting commands need a validated connection and are confirmed by readback, not
 by the transmitted command. `STATUS` reports the band and channel the VTX is on
@@ -236,6 +274,9 @@ frame of its ideal DAC waveform, for comparing against what a receiver shows.
 
 ## SD video playback
 
+On the M5Stack Basic only; the StickC Plus2 has no card slot, and its firmware
+is built without the player.
+
 The Image row lists the five built-in images, then every compatible `.m5v` in
 the FAT32 card's root (up to 32, sorted by name), then Rescan SD. The card is
 read at boot and on rescan, not while scrolling. Files with a bad header, the
@@ -275,7 +316,7 @@ The PC tools are Go, under `tools/`, built by the Makefile into `bin/`:
 ```sh
 make            # bin/convertvideo, bin/referencerender and bin/m5vtxctl
 make test       # Go tests, then the C++ host tests
-make vtx-host-test   # the VTX parser against the pinned headers; needs one pio run first
+make vtx-host-test   # the VTX parser against the pinned headers, with each board's pins; needs one pio run first
 ```
 
 GNU make with a POSIX shell (Git Bash or MSYS2 on Windows), Go 1.22 or newer and g++.
@@ -292,7 +333,7 @@ simulated board and checks the report formats it reads against `src/main.cpp`. T
 C++ host tests cover the framebuffer exchange and
 palette cache, the M5V decoder, the SD player with a simulated card, the
 vtxtable CLI against two real Betaflight dumps, and the VTX state machine with
-published SmartAudio and Tramp frames. None of them touch hardware; only a
+published SmartAudio and Tramp frames, on the Basic's control pins and the StickC Plus2's. None of them touch hardware; only a
 receiver shows what the VTX sends.
 
 ## Device notes
@@ -331,6 +372,7 @@ is probed first.
   revision `54c21169305499667b9039022282288177ef1699`: SmartAudio and Tramp
   definitions, CRCs and frame builders, used through its headers by the
   nonblocking `VtxManager` in `src/vtx_manager.cpp`.
-- [M5Stack Basic v2.7](https://docs.m5stack.com/en/core/Basic_v2.7).
+- [M5Stack Basic v2.7](https://docs.m5stack.com/en/core/Basic_v2.7) and
+  [M5StickC Plus2](https://docs.m5stack.com/en/core/StickC-Plus2).
 
 The project is GPL-3.0; see LICENSE.

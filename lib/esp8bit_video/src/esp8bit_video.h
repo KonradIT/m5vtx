@@ -25,7 +25,8 @@ struct SampleBand {
   const uint16_t* samples;              // palBandSamples of them
 };
 
-bool begin(uint8_t* frontRgb332, uint8_t* backRgb332);
+// The raster goes out on one DAC: GPIO25 (DAC1) or GPIO26 (DAC2). The other stays off.
+bool begin(uint8_t* frontRgb332, uint8_t* backRgb332, int dacPin = 26);
 bool running();
 uint32_t frames();
 // Restarts the raster when the standard changes, keeping the current images. Stop

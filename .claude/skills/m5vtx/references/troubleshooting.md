@@ -31,7 +31,7 @@ Then, one at a time:
 1. Confirm VTX power, and measure 5 V at the VTX under load. The M5Stack's 5 V rail is limited, and a VTX at high power can pull it down.
 2. Confirm a common ground between the M5Stack and the VTX.
 3. `m5vtxctl send -seconds 70 -grep DETECTED -until "VTX DETECTED" probe` repeats discovery. It sends only queries and changes nothing on the VTX.
-4. `m5vtxctl send -seconds 70 -grep DETECTED -until "VTX DETECTED" "pin 17"` tries the other pin. This is stored, so put it back if it was not the answer.
+4. `m5vtxctl send -seconds 70 -grep DETECTED -until "VTX DETECTED" "pin 17"` tries the other pin; on an M5StickC Plus2 the pins are 0, 32 and 33. This is stored, so put it back if it was not the answer.
 5. `m5vtxctl send -seconds 70 -grep DETECTED -until "VTX DETECTED" "protocol auto"` tries all 37 variants of both protocols. This is stored too, so every later boot would search them all. Once `status.protocol` names what replied, select that one, or put back the earlier one if nothing did.
 
 If `rx_edges` stays 0 through all of that, a scope or logic analyzer on the control wire separates the rest. Query pulses at the VTX pad, with nothing after them, clear the wire and leave the VTX or the choice of pad. A VTX known to work, on the same wire, clears the M5Stack side. The board cannot tell these apart by itself.

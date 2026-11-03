@@ -18,13 +18,13 @@ An unknown or out-of-range command prints a help text and does nothing, includin
 | `status` | Prints the report. It also prints every 5 s by itself | |
 | `media` | Prints the media report and one `MEDIA_FILE` line per movie | |
 | `pattern 0..4` | Selects a built-in image; 4 switches to PAL, others to NTSC | |
-| `play N` | Plays movie N, by its `index`, looping until another image is chosen. NTSC only | |
+| `play N` | Plays movie N, by its `index`, looping until another image is chosen. NTSC only. Basic only; an M5StickC Plus2 answers `###ERROR` | |
 | `image N` | Any entry of the Image row: 0..4 built-in, then movies, then Rescan SD (the `image` in `MEDIA_FILE`) | |
-| `sdscan` | Re-reads the card. It stops playback and returns to image 0 | |
+| `sdscan` | Re-reads the card. It stops playback and returns to image 0. Basic only, as `play` | |
 | `probe` | Repeats discovery with queries only, and clears unsent edits | |
 | `query` | Asks the VTX for its settings now, instead of at the next 1.5 s poll | |
 | `protocol smartaudio`, `tramp`, `auto` | Selects what discovery tries, and starts it | Yes |
-| `pin 16`, `pin 17` | Selects the control pin and starts discovery | Yes |
+| `pin N` | Selects the control pin and starts discovery: 16 or 17 on a Basic, 0, 32 or 33 on an M5StickC Plus2 | Yes |
 | `sa2-offset 0`, `1` | 1 for a SmartAudio v2 VTX whose GET power reads one above its SET | Yes |
 | `vtxtable` | Prints the table | |
 | `vtxtable bands N`, `channels N`, `powerlevels N` | Sizes the table, at most 8 each | By `save` |

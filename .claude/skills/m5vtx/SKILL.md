@@ -5,12 +5,14 @@ description: Control and read an M5VTX bench board over USB serial, a known-good
 
 # M5VTX bench board
 
-The M5VTX is an ESP32 M5Stack Basic that generates composite video on its DAC and commands a VTX over a single control wire. On a bench it plays two roles: a stimulus whose signal is known, and a transmitter you can retune from a script. Use it to move the boundary of a fault along the chain until one link is left.
+The M5VTX is an ESP32 M5Stack Basic or M5StickC Plus2 that generates composite video on its DAC and commands a VTX over a single control wire. On a bench it plays two roles: a stimulus whose signal is known, and a transmitter you can retune from a script. Use it to move the boundary of a fault along the chain until one link is left.
 
 ```
 M5Stack GPIO26 (DAC2) -- composite --> VTX video in -- 5.8 GHz RF --> receiver --> display or grabber
 M5Stack GPIO16 or 17 <-- SmartAudio or Tramp --> VTX control pad
 ```
+
+On an M5StickC Plus2 the control wire is on G0, G32 or G33 instead, video is still on G26, and there are no SD movies: the stick has no card slot. The boot line `M5 board=... firmware="..."` names the board the firmware was built for, and `MEDIA_STATE` says when there is no slot.
 
 ## What the board can and cannot tell you
 
@@ -85,7 +87,7 @@ A report with `rebooted: true` means the board restarted during that command, so
 
 ## Choosing a stimulus
 
-Built-in images are `pattern 0` to `pattern 4`. SD movies are `play N`, listed by `send media`. All are NTSC except pattern 4.
+Built-in images are `pattern 0` to `pattern 4`. SD movies, on a Basic only, are `play N`, listed by `send media`. All are NTSC except pattern 4.
 
 | To check | Use | Why |
 | --- | --- | --- |
