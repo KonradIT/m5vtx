@@ -9,9 +9,13 @@ and all audio code are removed. The framebuffer is indexed 8-bit with either RGB
 a clip-specific RGB palette converted to YUV waveforms. Each framebuffer owns
 its waveform table; pixels and their palette become active at the same vblank.
 Palette calculations happen outside the ISR and are cached per buffer. The
-GPIO26/DAC2 route is selected in hardware; changing an upstream
-`VIDEO_PIN` macro alone did not change its hardcoded GPIO25 DAC selection.
-GPIO25 DAC output remains disabled. No speaker or PWM peripheral is started.
+DAC is `begin()`'s choice, GPIO26/DAC2 by default or GPIO25/DAC1, selected in
+hardware; changing an upstream `VIDEO_PIN` macro alone did not change its
+hardcoded GPIO25 DAC selection. The I2S stream is mono, so both channels carry
+the raster and only the chosen DAC is powered. M5VTX takes the pin from
+`M5VTX_VIDEO_DAC_GPIO`: GPIO26 on the M5Stack Basic, whose GPIO25 is the
+speaker, and by default on the M5StickC Plus2. No speaker or PWM peripheral is
+started.
 
 This targets classic ESP32 with Arduino-ESP32 2.x / ESP-IDF 4.4. It uses low
 level registers rather than the installed I2S driver and owns I2S0/APLL.

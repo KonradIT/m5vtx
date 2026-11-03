@@ -39,10 +39,16 @@ host-tests:
 	$(CXX) $(CXXFLAGS) $(HOST_LINK) -pthread -Itests/sd_video_host/stubs -Iinclude tests/sd_video_host/test_player.cpp src/sd_video_player.cpp -o tests/sd_video_host/test_player$(EXE)
 	tests/sd_video_host/test_player$(EXE)
 
-# Needs the pinned VTXControl_ESP32 headers, which the first pio run installs.
+# Needs the pinned VTXControl_ESP32 headers, which the first pio run installs. Run
+# for the Basic, then with the StickC Plus2's pins from platformio.ini.
+PLUS2_DEFINES := -DM5VTX_BOARD=M5VTX_BOARD_STICKC_PLUS2 -DM5VTX_HAS_SD=0 -DM5VTX_VIDEO_DAC_GPIO=26 \
+	-DM5VTX_CONTROL_PINS=0,32,33 -DM5VTX_CONTROL_PIN_DEFAULT=0
+
 vtx-host-test:
 	$(CXX) -std=c++11 $(HOST_LINK) -Itests/vtx_host/stubs -Iinclude -I$(PIO_LIBDEPS)/VTXControl_ESP32/src tests/vtx_host/test_vtx.cpp src/vtx_manager.cpp -o tests/vtx_host/test_vtx$(EXE)
 	tests/vtx_host/test_vtx$(EXE)
+	$(CXX) -std=c++11 $(HOST_LINK) -Itests/vtx_host/stubs -Iinclude -I$(PIO_LIBDEPS)/VTXControl_ESP32/src tests/vtx_host/test_vtx.cpp src/vtx_manager.cpp $(PLUS2_DEFINES) -o tests/vtx_host/test_vtx_plus2$(EXE)
+	tests/vtx_host/test_vtx_plus2$(EXE)
 
 clean:
 	rm -rf $(BIN) tests/video_host/*$(EXE) tests/sd_video_host/*$(EXE) tests/vtx_host/*$(EXE)

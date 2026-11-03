@@ -33,6 +33,11 @@ void hexLog(const char* direction, const uint8_t* bytes, size_t length) {
 uint16_t dbmToMw(uint8_t dbm) {
   return dbm < 48 ? uint16_t(lroundf(powf(10.0f, dbm / 10.0f))) : 0;
 }
+// A pin's output-enable bit. GPIO32..39, such as the M5StickC Plus2's Grove pins,
+// have theirs in a second register.
+unsigned outputEnabled(int pin) {
+  return pin < 32 ? (GPIO.enable >> pin) & 1 : (GPIO.enable1.data >> (pin - 32)) & 1;
+}
 }
 
 const VtxManager::Candidate VtxManager::candidates_[] = {
@@ -122,8 +127,8 @@ const VtxManager::Candidate* VtxManager::probeCandidate(uint8_t index) const {
 }
 
 bool VtxManager::setPin(int pin) {
-  if (pin != 16 && pin != 17) {
-    Serial.printf("VTX invalid control pin %d; supported GPIO16 or GPIO17\n", pin);
+  if (!Board::isControlPin(pin)) {
+    Serial.printf("VTX invalid control pin %d for the %s\n", pin, Board::name);
     return false;
   }
   // Clean up the current pin before changing pin_: otherwise an old GPIO edge
@@ -133,9 +138,11 @@ bool VtxManager::setPin(int pin) {
     uart_.end();
     uartStarted_ = false;
   }
-  gpio_matrix_out(pin_, SIG_GPIO_OUT_IDX, false, false);
-  gpio_set_direction(gpio_num_t(pin_), GPIO_MODE_INPUT);
-  gpio_set_pull_mode(gpio_num_t(pin_), GPIO_FLOATING);
+  if (pin_ >= 0) {
+    gpio_matrix_out(pin_, SIG_GPIO_OUT_IDX, false, false);
+    gpio_set_direction(gpio_num_t(pin_), GPIO_MODE_INPUT);
+    gpio_set_pull_mode(gpio_num_t(pin_), GPIO_FLOATING);
+  }
   pin_ = pin;
   uart_.setRxBufferSize(512);
   reprobe();
@@ -143,6 +150,7 @@ bool VtxManager::setPin(int pin) {
 }
 
 void VtxManager::reprobe() {
+  if (pin_ < 0) return;  // nothing goes on any wire before begin()
   const uint32_t oldQueries = status_.queries;
   status_ = VtxStatus{};
   status_.queries = oldQueries;
@@ -303,7 +311,7 @@ void VtxManager::update() {
     lineSampled_ = true;
     status_.settledLevel = gpio_get_level(gpio_num_t(pin_));
     Serial.printf("VTX LINE_RX settled=%d output_enabled=%u edges_after_1ms=%lu\n",
-                  status_.settledLevel, unsigned((GPIO.enable >> pin_) & 1),
+                  status_.settledLevel, outputEnabled(pin_),
                   (unsigned long)responseEdges_);
   }
   if (waiting_) {

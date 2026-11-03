@@ -285,7 +285,7 @@ bool begin() {
     pixels = buffers[0];
     showTestPattern();
     memcpy(buffers[1], buffers[0], width * height);
-    if (Esp8BitVideo::begin(buffers[0], buffers[1])) return true;
+    if (Esp8BitVideo::begin(buffers[0], buffers[1], pin)) return true;
     for (auto& allocated : buffers) { heap_caps_free(allocated); allocated = nullptr; }
     pixels = nullptr;
     return false;

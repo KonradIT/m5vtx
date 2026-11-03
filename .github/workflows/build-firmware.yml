@@ -15,14 +15,23 @@ concurrency:
   group: firmware-${{ github.sha }}
   cancel-in-progress: false
 
-env:
-  BOARD_ENV: m5stack-basic-v27
-
 jobs:
   build:
-    name: Test and build
+    name: Test and build (${{ matrix.board }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # env: the platformio.ini environment; board: the image's name.
+          - env: m5stack-basic-v27
+            board: m5stack-basic
+          - env: m5stickc-plus2
+            board: m5stickc-plus2
+    env:
+      BOARD_ENV: ${{ matrix.env }}
+      BOARD: ${{ matrix.board }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -49,12 +58,13 @@ jobs:
         run: pio run --environment "$BOARD_ENV"
 
       - name: VTX host test
-        # Needs the pinned VTXControl_ESP32 headers from the build.
-        run: make vtx-host-test
+        # Needs the pinned VTXControl_ESP32 headers from the build. Runs for both
+        # boards' pins.
+        run: make vtx-host-test PIO_LIBDEPS=".pio/libdeps/$BOARD_ENV"
 
       - name: Package factory image
         run: |
-          IMAGE="m5vtx-m5stack-basic-${GITHUB_SHA::7}.factory.bin"
+          IMAGE="m5vtx-$BOARD-${GITHUB_SHA::7}.factory.bin"
           SEGMENTS="$RUNNER_TEMP/segments"
           mkdir -p build/firmware
           # The files and offsets that pio run --target upload writes.
@@ -73,7 +83,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: m5vtx-firmware
+          name: m5vtx-firmware-${{ matrix.board }}
           path: build/firmware/*
           if-no-files-found: error
 
@@ -85,10 +95,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download image
+      - name: Download images
         uses: actions/download-artifact@v8
         with:
-          name: m5vtx-firmware
+          pattern: m5vtx-firmware-*
+          merge-multiple: true
           path: build/firmware
 
       - name: Release
@@ -99,12 +110,16 @@ jobs:
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
           TAG="firmware-$SHORT_SHA"
-          IMAGE="m5vtx-m5stack-basic-$SHORT_SHA.factory.bin"
-          (cd build/firmware && sha256sum --check "$IMAGE.sha256")
+          BASIC="m5vtx-m5stack-basic-$SHORT_SHA.factory.bin"
+          PLUS2="m5vtx-m5stickc-plus2-$SHORT_SHA.factory.bin"
+          (cd build/firmware && sha256sum --check "$BASIC.sha256" "$PLUS2.sha256")
           cat > build/release-notes.md <<EOF
-          M5VTX firmware for the M5Stack Basic v2.7 (classic ESP32, 16 MB flash), from commit $GITHUB_SHA. Not for the S3 or a PSRAM Fire.
+          M5VTX firmware from commit $GITHUB_SHA, one image per board:
 
-          Flash **$IMAGE** with https://espflash.app in desktop Chrome or Edge, with any serial monitor closed. It holds the bootloader, partition table and application, and goes at **0x0**. The .sha256 file verifies the download.
+          - **$BASIC**: M5Stack Basic v2.7 (classic ESP32, 16 MB flash). Not for the S3 or a PSRAM Fire.
+          - **$PLUS2**: M5StickC Plus2 (ESP32-PICO-V3-02, 8 MB flash). No SD movies: the stick has no card slot.
+
+          Flash the image for your board with https://espflash.app in desktop Chrome or Edge, with any serial monitor closed. It holds the bootloader, partition table and application, and goes at **0x0**. The .sha256 files verify the downloads.
 
           **Flashing erases the settings stored on the board:** the vtxtable, protocol, control pin and SmartAudio v2 offset. Save the table first with \`m5vtxctl send vtxtable\`, then go through [first-time setup](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/README.md#first-time-setup) again.
           EOF

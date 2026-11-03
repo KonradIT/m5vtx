@@ -2,13 +2,15 @@
 
 #include <stdint.h>
 
-// RGB332 framebuffer (RRRGGGBB), scanned continuously through DAC2/GPIO26.
+#include "board.h"
+
+// RGB332 framebuffer (RRRGGGBB), scanned continuously through the board's video DAC.
 // I2S0 and the audio PLL are exclusively owned by this output engine.
 namespace CompositeVideo {
 constexpr int width = 256;
 constexpr int height = 240;
 constexpr int palHeight = 288;
-constexpr int pin = 26;
+constexpr int pin = Board::videoPin;  // 25 (DAC1) or 26 (DAC2)
 constexpr uint8_t patternCount = 5;
 constexpr uint8_t palPattern = 4;
 

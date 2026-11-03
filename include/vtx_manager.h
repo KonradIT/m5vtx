@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 
+#include "board.h"
+
 enum class VtxProtocol : uint8_t { Unknown, SmartAudio, Tramp };
 
 struct VtxStatus {
@@ -51,9 +53,9 @@ struct VtxStatus {
 // command; success means queued, and only later GET replies update status().
 class VtxManager {
  public:
-  void begin(int pin = 17);
-  // GPIO16/17 are the supported Basic control pins; invalid values leave the
-  // active wire untouched. Switching releases the old wire before probing.
+  void begin(int pin = Board::defaultControlPin);
+  // Only the board's control pins are accepted; invalid values leave the active
+  // wire untouched. Switching releases the old wire before probing.
   bool setPin(int pin);
   int pin() const { return pin_; }
   // Unknown selects automatic discovery. A forced family probes only its own
@@ -102,7 +104,7 @@ class VtxManager {
   HardwareSerial uart_{2};
   VtxStatus status_;
   VtxProtocol selectedProtocol_ = VtxProtocol::Unknown;
-  int pin_ = 17;
+  int pin_ = -1;  // none until begin()
   bool uartStarted_ = false;
   bool edgeInterruptAttached_ = false;
   uint8_t rx_[128] = {};

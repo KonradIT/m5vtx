@@ -4,27 +4,36 @@
 #include <Preferences.h>
 #include <driver/dac.h>
 
+#include "board.h"
 #include "composite_video.h"
+#if M5VTX_HAS_SD
 #include "sd_video_player.h"
+#endif
 #include "vtx_manager.h"
 #include "vtx_table.h"
 
 namespace {
 VtxManager vtx;
 VtxTable table;
+#if M5VTX_HAS_SD
 SdVideoPlayer sdVideo;
-SemaphoreHandle_t spiBusMutex = nullptr;
 bool mediaInitialized = false;
+uint32_t lastMediaCheck = 0, lastMediaFrames = 0;
+char lastMediaMessage[96] = {};
+#endif
+SemaphoreHandle_t spiBusMutex = nullptr;  // the LCD's SPI bus, and the card's where there is one
+constexpr Board::Layout layout = Board::layout;
 M5Canvas displayLine(&M5.Display);
 bool displayBuffered = false;
 bool displayDeferred = false;
 uint32_t displayTransfers = 0;
 enum Field : uint8_t { Band, Channel, Power, Pit, Protocol, Image, Probe, FieldCount };
 Field selected = Channel;
+uint8_t firstShownField = 0;  // the field rows scroll where they do not all fit
 Field pendingField = FieldCount;
 uint32_t pendingSince = 0;
 uint8_t draftBand = 0, draftChannel = 0, draftPower = 0, pattern = 0;  // 0-based into the vtxtable
-uint8_t controlPin = 16, draftControlPin = 16;
+uint8_t controlPin = Board::defaultControlPin, draftControlPin = Board::defaultControlPin;
 VtxProtocol controlProtocol = VtxProtocol::SmartAudio;
 VtxProtocol draftProtocol = VtxProtocol::SmartAudio;
 bool draftPit = false;
@@ -38,8 +47,6 @@ bool protocolSaved = false;  // the protocol was chosen and is in NVS
 bool setupShown = false;     // the setup list is what the LCD shows now
 bool screenDirty = true;
 uint32_t lastScreen = 0, lastReport = 0, lastResponses = 0;
-uint32_t lastMediaCheck = 0, lastMediaFrames = 0;
-char lastMediaMessage[96] = {};
 char notice[64] = "Queries only during discovery";
 char commandLine[192] = {};
 size_t commandLength = 0;
@@ -172,6 +179,8 @@ void followChannel(const VtxStatus& s) {
   if (reportedChannel(s, band, channel)) { draftBand = band - 1; draftChannel = channel - 1; }
 }
 
+// The built-in images, then on a board with a card slot its movies and Rescan SD.
+#if M5VTX_HAS_SD
 size_t imageOptionCount() { return builtInImages + sdVideo.count() + 1; }
 
 void rescanVideos() {
@@ -180,21 +189,34 @@ void rescanVideos() {
   CompositeVideo::showTestPattern(pattern);
   notify(mediaInitialized && sdVideo.rescan() ? "Scanning SD card" : "SD player unavailable");
 }
+#else
+size_t imageOptionCount() { return builtInImages; }
+#endif
 
 bool selectImage(uint8_t choice, bool activateRescan = false) {
+  if (choice < builtInImages) {
+#if M5VTX_HAS_SD
+    sdVideo.stop();
+#endif
+    pattern = choice;
+    CompositeVideo::showTestPattern(pattern);
+    notify("Image displayed on video output");
+    return true;
+  }
+#if !M5VTX_HAS_SD
+  (void)activateRescan;
+  return false;
+#else
   const size_t videoCount = sdVideo.count();
   if (choice > builtInImages + videoCount) return false;
   if (choice == builtInImages + videoCount) {
     pattern = choice;
     if (activateRescan) rescanVideos();
-    else notify("Hold C to rescan SD card");
-    return true;
-  }
-  if (choice < builtInImages) {
-    sdVideo.stop();
-    pattern = choice;
-    CompositeVideo::showTestPattern(pattern);
-    notify("Image displayed on video output");
+    else {
+      char text[64];
+      snprintf(text, sizeof(text), "Hold %s to rescan SD card", Board::applyButton);
+      notify(text);
+    }
     return true;
   }
   // Movies are NTSC. Nothing is producing frames while the PAL card is up.
@@ -208,8 +230,10 @@ bool selectImage(uint8_t choice, bool activateRescan = false) {
   pattern = choice;
   notify("Loading SD video");
   return true;
+#endif
 }
 
+#if M5VTX_HAS_SD
 void reportMedia(bool listFiles = false) {
   const auto media = sdVideo.status();
   Serial.printf("MEDIA mounted=%u scanning=%u playing=%u loading=%u files=%u selected=%d frame=%lu/%lu fps=%u/%u presented=%lu underruns=%lu errors=%lu rejected=%lu read_ms=%lu max_read_us=%lu image=%u flips=%lu format=%s header_bytes=%u\n",
@@ -246,6 +270,35 @@ void syncMedia() {
     screenDirty = true;
   }
 }
+
+// The second row while a movie plays or loads.
+bool movieProgress(char* text, size_t size) {
+  const auto media = sdVideo.status();
+  if (media.playing && media.fpsNum) {
+    const uint32_t seconds = uint64_t(media.frameIndex) * media.fpsDen / media.fpsNum;
+    const uint32_t total = uint64_t(media.totalFrames) * media.fpsDen / media.fpsNum;
+    snprintf(text, size, "Play %02lu:%02lu / %02lu:%02lu  %u fps",
+             static_cast<unsigned long>(seconds / 60), static_cast<unsigned long>(seconds % 60),
+             static_cast<unsigned long>(total / 60), static_cast<unsigned long>(total % 60),
+             unsigned((media.fpsNum + media.fpsDen / 2) / media.fpsDen));
+    return true;
+  }
+  if (media.loading) {
+    snprintf(text, size, "Loading SD video...");
+    return true;
+  }
+  return false;
+}
+#else
+// No card slot. The report keeps its shape for the tools that read it.
+void reportMedia(bool = false) {
+  Serial.printf("MEDIA mounted=0 scanning=0 playing=0 loading=0 files=0 selected=-1 image=%u flips=%lu format=none\n",
+                pattern, static_cast<unsigned long>(CompositeVideo::presentedFrames()));
+  Serial.printf("MEDIA_STATE The %s has no SD card slot\n", Board::name);
+}
+
+bool movieProgress(char*, size_t) { return false; }
+#endif
 
 void report() {
   const auto& s = vtx.status();
@@ -424,11 +477,16 @@ void change(int direction) {
     case Image:
       selectImage((pattern + imageOptionCount() + direction) % imageOptionCount());
       return;
-    case Probe:
-      draftControlPin = draftControlPin == 17 ? 16 : 17;
+    case Probe: {
+      size_t index = 0;
+      while (index < Board::controlPinCount && Board::controlPins[index] != draftControlPin) ++index;
+      draftControlPin = Board::controlPins[(index + Board::controlPinCount + direction) % Board::controlPinCount];
       screenDirty = true;
-      notify("Hold C to select pin and probe");
+      char text[64];
+      snprintf(text, sizeof(text), "Hold %s to select pin and probe", Board::applyButton);
+      notify(text);
       return;
+    }
     default: return;
   }
   edited |= (1 << selected);
@@ -459,7 +517,8 @@ void button(const char* key) {
 }
 
 // Render each changed strip off-screen, then transfer the finished pixels.
-// A single 320x22 RGB565 canvas uses 14 KB, leaving RAM for video and UART.
+// A single row-high RGB565 canvas, 14 KB on the Basic's 320x22, leaves RAM for
+// video and UART.
 struct CachedLine {
   char left[64] = {};
   char right[48] = {};
@@ -467,6 +526,8 @@ struct CachedLine {
   bool valid = false;
 };
 CachedLine lineCache[FieldCount + 5];
+static_assert(layout.fieldRows > 0 && layout.fieldRows <= FieldCount, "Field rows are slots 2 onwards");
+static_assert(4 + Board::setupNoteLines <= FieldCount + 2, "Setup notes are slots 4 onwards");
 
 // Between the setup list and the main screen: start from black, redraw every row.
 void clearDisplay() {
@@ -496,19 +557,22 @@ void drawDisplayLine(uint8_t slot, int y, int height, const char* left,
   surface.setFont(&fonts::Font2);
   surface.setTextSize(1);
   surface.setTextWrap(false);
-  surface.fillRect(0, top, 320, height, background);
+  surface.fillRect(0, top, layout.width, height, background);
   surface.setTextColor(color, background);
   const int textY = top + (height > 16 ? 1 : 0);
   surface.setCursor(6, textY);
   surface.print(left);
   if (*right) {
-    surface.setCursor(132, textY);
+    // A label wider than the value column pushes its value along.
+    int rightX = 14 + surface.textWidth(left);
+    if (rightX < layout.valueX) rightX = layout.valueX;
+    surface.setCursor(rightX, textY);
     surface.print(right);
   }
   if (displayBuffered) {
     // The reusable sprite is taller than the footer; clip to this strip so a
     // changed row cannot overwrite the neighboring row's cached pixels.
-    lcd.setClipRect(0, y, 320, height);
+    lcd.setClipRect(0, y, layout.width, height);
     displayLine.pushSprite(0, y);
     lcd.clearClipRect();
   }
@@ -521,28 +585,34 @@ void drawDisplayLine(uint8_t slot, int y, int height, const char* left,
   ++displayTransfers;
 }
 
+// The notice, then the key help at the bottom of the screen.
+void drawFooter(const char* const* keys, size_t keyLines) {
+  const int keysTop = layout.height - int(keyLines) * layout.keyHeight;
+  char text[64];
+  snprintf(text, sizeof(text), "%.43s", notice);
+  drawDisplayLine(FieldCount + 2, keysTop - layout.noticeHeight, layout.noticeHeight, text, "", TFT_YELLOW);
+  for (size_t i = 0; i < keyLines; ++i)
+    drawDisplayLine(FieldCount + 3 + i, keysTop + int(i) * layout.keyHeight, layout.keyHeight, keys[i], "", TFT_LIGHTGREY);
+}
+
 void drawSetupScreen() {
   const auto tick = [](bool done) { return done ? "[x]" : "[ ]"; };
+  const int rows = layout.rowHeight, items = layout.setupItemsY;
   char text[64];
-  drawDisplayLine(0, 0, 21, "SETUP", "", TFT_YELLOW);
+  drawDisplayLine(0, 0, rows, "SETUP", "", TFT_YELLOW);
   snprintf(text, sizeof(text), "%s VTX bands / channels", tick(setupBandsDone()));
-  drawDisplayLine(1, 24, 21, text, "", TFT_WHITE);
+  drawDisplayLine(1, items, rows, text, "", TFT_WHITE);
   snprintf(text, sizeof(text), "%s VTX power levels", tick(setupPowerDone()));
-  drawDisplayLine(2, 45, 21, text, "", TFT_WHITE);
+  drawDisplayLine(2, items + rows, rows, text, "", TFT_WHITE);
   snprintf(text, sizeof(text), "%s VTX protocol", tick(protocolSaved));
-  drawDisplayLine(3, 66, 21, text, protocolChoiceName(draftProtocol), TFT_WHITE, protocolSaved ? TFT_BLACK : 0x1928);
-  drawDisplayLine(4, 96, 21, "Bands and power: paste the vtxtable", "", TFT_LIGHTGREY);
-  drawDisplayLine(5, 117, 21, "over USB serial, then save", "", TFT_LIGHTGREY);
-  drawDisplayLine(6, 138, 21, "Protocol: B / C, then hold C", "", TFT_LIGHTGREY);
-  snprintf(text, sizeof(text), "%.43s", notice);
-  drawDisplayLine(FieldCount + 2, 190, 18, text, "", TFT_YELLOW);
-  drawDisplayLine(FieldCount + 3, 208, 16, "B: -    C: +", "", TFT_LIGHTGREY);
-  drawDisplayLine(FieldCount + 4, 224, 16, "Hold C: save protocol", "", TFT_LIGHTGREY);
+  drawDisplayLine(3, items + 2 * rows, rows, text, protocolChoiceName(draftProtocol), TFT_WHITE, protocolSaved ? TFT_BLACK : 0x1928);
+  for (size_t i = 0; i < Board::setupNoteLines; ++i)
+    drawDisplayLine(4 + i, layout.setupNotesY + int(i) * rows, rows, Board::setupNotes[i], "", TFT_LIGHTGREY);
+  drawFooter(Board::setupKeys, Board::setupKeyLines);
 }
 
 void drawScreen() {
   const auto& s = vtx.status();
-  const auto media = sdVideo.status();
   displayDeferred = false;
   const bool setup = !setupComplete();
   if (setup != setupShown) {
@@ -555,25 +625,24 @@ void drawScreen() {
     screenDirty = displayDeferred;
     return;
   }
+  const int rows = layout.rowHeight;
   char text[64], value[48];
   if (s.connected) {
     if (s.powerMilliwatts) snprintf(text, sizeof(text), "%s %u MHz %u mW", VtxManager::protocolName(s.protocol), s.frequencyMHz, s.powerMilliwatts);
     else snprintf(text, sizeof(text), "%s %u MHz power #%d", VtxManager::protocolName(s.protocol), s.frequencyMHz, s.powerIndex);
   } else if (s.probing) snprintf(text, sizeof(text), "%s: probing %u/%u  %lu", protocolChoiceName(controlProtocol), s.probeIndex + 1, s.probeCount, static_cast<unsigned long>(s.baud));
   else snprintf(text, sizeof(text), "No %s reply - hold B to retry", protocolChoiceName(controlProtocol));
-  drawDisplayLine(0, 0, 21, text, "", s.connected ? TFT_GREEN : TFT_YELLOW);
-  if (media.playing && media.fpsNum) {
-    const uint32_t seconds = uint64_t(media.frameIndex) * media.fpsDen / media.fpsNum;
-    const uint32_t total = uint64_t(media.totalFrames) * media.fpsDen / media.fpsNum;
-    snprintf(text, sizeof(text), "Play %02lu:%02lu / %02lu:%02lu  %u fps",
-             static_cast<unsigned long>(seconds / 60), static_cast<unsigned long>(seconds % 60),
-             static_cast<unsigned long>(total / 60), static_cast<unsigned long>(total % 60),
-             unsigned((media.fpsNum + media.fpsDen / 2) / media.fpsDen));
-  } else if (media.loading) snprintf(text, sizeof(text), "Loading SD video...");
-  else if (s.connected) snprintf(text, sizeof(text), "Pit:%s  G%u:%lu%s", s.pitMode ? "ON" : "OFF", controlPin, static_cast<unsigned long>(s.baud), s.inverted ? " inv" : "");
-  else snprintf(text, sizeof(text), "%s", s.stateText);
-  drawDisplayLine(1, 21, 21, text, "", TFT_LIGHTGREY);
-  for (uint8_t row = 0; row < FieldCount; ++row) {
+  drawDisplayLine(0, 0, rows, text, "", s.connected ? TFT_GREEN : TFT_YELLOW);
+  if (!movieProgress(text, sizeof(text))) {
+    if (s.connected) snprintf(text, sizeof(text), "Pit:%s  G%u:%lu%s", s.pitMode ? "ON" : "OFF", controlPin, static_cast<unsigned long>(s.baud), s.inverted ? " inv" : "");
+    else snprintf(text, sizeof(text), "%s", s.stateText);
+  }
+  drawDisplayLine(1, rows, rows, text, "", TFT_LIGHTGREY);
+  // The field rows that fit, scrolled to keep the selection on the screen.
+  if (selected < firstShownField) firstShownField = selected;
+  else if (selected >= firstShownField + layout.fieldRows) firstShownField = selected - layout.fieldRows + 1;
+  for (uint8_t line = 0; line < layout.fieldRows; ++line) {
+    const uint8_t row = firstShownField + line;
     snprintf(text, sizeof(text), "%s%s", fieldNames[row], (edited & (1 << row)) ? " *" : "");
     switch (row) {
       case Band:
@@ -589,20 +658,19 @@ void drawScreen() {
       case Protocol: snprintf(value, sizeof(value), "%s", protocolChoiceName(draftProtocol)); break;
       case Image:
         if (pattern < builtInImages) snprintf(value, sizeof(value), "%s", patternNames[pattern]);
+#if M5VTX_HAS_SD
         else if (pattern < builtInImages + sdVideo.count()) {
           const auto entry = sdVideo.entry(pattern - builtInImages);
           snprintf(value, sizeof(value), "%.24s", *entry.title ? entry.title : entry.name);
-        } else snprintf(value, sizeof(value), "Rescan SD (hold C)");
+        } else snprintf(value, sizeof(value), "Rescan SD (hold %s)", Board::applyButton);
+#endif
         break;
-      case Probe: snprintf(value, sizeof(value), "GPIO%u - hold C", draftControlPin); break;
+      case Probe: snprintf(value, sizeof(value), "GPIO%u - hold %s", draftControlPin, Board::applyButton); break;
     }
-    drawDisplayLine(2 + row, 42 + row * 21, 21, text, value, TFT_WHITE,
+    drawDisplayLine(2 + line, (2 + line) * rows, rows, text, value, TFT_WHITE,
                     selected == row ? 0x1928 : TFT_BLACK);
   }
-  snprintf(text, sizeof(text), "%.43s", notice);
-  drawDisplayLine(FieldCount + 2, 190, 18, text, "", TFT_YELLOW);
-  drawDisplayLine(FieldCount + 3, 208, 16, "A: next    B: -    C: +", "", TFT_LIGHTGREY);
-  drawDisplayLine(FieldCount + 4, 224, 16, "Hold C: apply   Hold B: probe", "", TFT_LIGHTGREY);
+  drawFooter(Board::mainKeys, Board::mainKeyLines);
   screenDirty = displayDeferred;
 }
 
@@ -695,7 +763,13 @@ void execute(char* line) {
   if (!*line || *line == '#') return;
   if (!strcmp(line, "status")) { report(); return; }
   if (!strcmp(line, "media")) { reportMedia(true); return; }
+#if M5VTX_HAS_SD
   if (!strcmp(line, "sdscan")) { rescanVideos(); return; }
+#else
+  if (!strcmp(line, "sdscan") || !strncmp(line, "play ", 5)) {
+    Serial.printf("###ERROR: the %s has no SD card slot\n", Board::name); return;
+  }
+#endif
   if (!strcmp(line, "probe")) {
     vtx.reprobe(); edited = 0; pendingField = FieldCount;
     draftControlPin = controlPin; draftProtocol = controlProtocol; return;
@@ -731,13 +805,15 @@ void execute(char* line) {
   if (!strcmp(line, "batch end")) { inBatch = false; return; }
   if (!strcmp(line, "defaults")) { clearVtxConfiguration(); return; }
   if (!strncmp(line, "vtx ", 4)) return;  // a dump's aux-channel ranges
+#if M5VTX_HAS_SD
   if (sscanf(line, "play %d", &value) == 1 && value >= 0 && value < int(sdVideo.count())) {
     selectImage(value + builtInImages); return;
   }
+#endif
   if (sscanf(line, "image %d", &value) == 1 && value >= 0 && value < int(imageOptionCount())) {
     selectImage(value, true); return;
   }
-  if (sscanf(line, "pin %d", &value) == 1 && (value == 16 || value == 17)) { selectControlPin(value); return; }
+  if (sscanf(line, "pin %d", &value) == 1 && Board::isControlPin(value)) { selectControlPin(value); return; }
   if (sscanf(line, "sa2-offset %d", &value) == 1 && (value == 0 || value == 1)) { setSa2Offset(value); return; }
   if (sscanf(line, "freq %d", &value) == 1 && value >= 0 && value <= 65535) queued = vtx.setFrequency(value);
   else if (sscanf(line, "power-index %d", &value) == 1 && value >= 0 && value < 8) queued = vtx.setPowerIndex(value);
@@ -747,7 +823,13 @@ void execute(char* line) {
     selectImage(value); return;
   } else {
     if (inBatch) return;
-    Serial.println("Commands: status | media | sdscan | play N | image N | pattern 0..4 | probe | query | protocol smartaudio/tramp/auto | pin 16/17 | sa2-offset 0/1 | freq MHz | power mW | power-index N | pit 0/1 | button a/b/c/holdc/holdb");
+    char pins[24] = {};
+    for (size_t i = 0; i < Board::controlPinCount; ++i) {
+      const size_t used = strlen(pins);
+      snprintf(pins + used, sizeof(pins) - used, i ? "/%u" : "%u", Board::controlPins[i]);
+    }
+    Serial.printf("Commands: status | media | %simage N | pattern 0..4 | probe | query | protocol smartaudio/tramp/auto | pin %s | sa2-offset 0/1 | freq MHz | power mW | power-index N | pit 0/1 | button a/b/c/holdc/holdb\n",
+                  Board::hasSd ? "sdscan | play N | " : "", pins);
     Serial.println("Betaflight: vtxtable [bands N | channels N | band N NAME L FACTORY/CUSTOM F1..FN | powerlevels N | powervalues ... | powerlabels ...] | set vtx_band/vtx_channel/vtx_power = N | get vtx | save | diff | defaults");
     return;
   }
@@ -766,16 +848,52 @@ void readConsole() {
     else commandLength = 0;
   }
 }
+
+// The M5Unified side of the board: what to assume if detection fails, and the
+// buttons that stand for A, B and C.
+#if M5VTX_BOARD == M5VTX_BOARD_STICKC_PLUS2
+constexpr m5::board_t m5Board = m5::board_t::board_M5StickCPlus2;
+
+// Front A, side B and the power button. Holding A applies, as holding C does on
+// the Basic. The power button is only clicked: holding it turns the stick off.
+void beginButtons() {
+  M5.BtnA.setHoldThresh(800);
+  M5.BtnB.setHoldThresh(800);
+}
+
+void readButtons() {
+  if (M5.BtnA.wasClicked()) button("a");
+  if (M5.BtnPWR.wasClicked()) button("b");
+  if (M5.BtnB.wasClicked()) button("c");
+  if (M5.BtnB.wasHold()) button("holdb");
+  if (M5.BtnA.wasHold()) button("holdc");
+}
+#else
+constexpr m5::board_t m5Board = m5::board_t::board_M5Stack;
+
+void beginButtons() {
+  M5.BtnB.setHoldThresh(800);
+  M5.BtnC.setHoldThresh(800);
+}
+
+void readButtons() {
+  if (M5.BtnA.wasClicked()) button("a");
+  if (M5.BtnB.wasClicked()) button("b");
+  if (M5.BtnC.wasClicked()) button("c");
+  if (M5.BtnB.wasHold()) button("holdb");
+  if (M5.BtnC.wasHold()) button("holdc");
+}
+#endif
 }  // namespace
 
 void setup() {
   auto cfg = M5.config();
   cfg.internal_spk = false;
-  cfg.internal_mic = false;
+  cfg.internal_mic = false;  // the StickC Plus2's microphone clock is G0, a control pin there
   cfg.internal_imu = false;
   cfg.internal_rtc = false;
   cfg.external_display_value = 0;
-  cfg.fallback_board = m5::board_t::board_M5Stack;
+  cfg.fallback_board = m5Board;
   cfg.output_power = true;
   M5.begin(cfg);
   Serial.begin(115200);
@@ -784,23 +902,25 @@ void setup() {
   M5.Display.fillScreen(TFT_BLACK);  // Clear once at startup, never while refreshing.
   displayLine.setColorDepth(16);
   displayLine.setPsram(false);
-  displayBuffered = displayLine.createSprite(320, 22) != nullptr;
+  displayBuffered = displayLine.createSprite(layout.width, layout.rowHeight + 1) != nullptr;
   if (!displayBuffered) Serial.println("UI line buffer unavailable; updating changed rows directly");
-  M5.BtnB.setHoldThresh(800);
-  M5.BtnC.setHoldThresh(800);
-  // The speaker shares GPIO25/DAC1. Video exclusively owns DAC2 on GPIO26.
-  dac_output_disable(DAC_CHANNEL_1);
-  pinMode(25, OUTPUT);
-  digitalWrite(25, LOW);
+  beginButtons();
+  if (Board::speakerPin >= 0) {
+    // The speaker shares GPIO25/DAC1. Video exclusively owns DAC2 on GPIO26.
+    dac_output_disable(DAC_CHANNEL_1);
+    pinMode(Board::speakerPin, OUTPUT);
+    digitalWrite(Board::speakerPin, LOW);
+  }
   Serial.printf("\nM5VTX boot: flash=%u XTAL=%u MHz heap=%u\n", ESP.getFlashChipSize(), getXtalFrequencyMhz(), ESP.getFreeHeap());
-  Serial.printf("M5 board=%u LCD=%dx%d buttons=A39/B38/C37 speaker=disabled\n", unsigned(M5.getBoard()), M5.Display.width(), M5.Display.height());
+  Serial.printf("M5 board=%u LCD=%dx%d buttons=%s speaker=disabled sd=%s firmware=\"%s\"\n", unsigned(M5.getBoard()),
+                M5.Display.width(), M5.Display.height(), Board::buttons, Board::hasSd ? "slot" : "none", Board::name);
   if (CompositeVideo::begin()) {
     CompositeVideo::showTestPattern(pattern);
-    Serial.println("VIDEO NTSC GPIO26 DAC2 RGB332 256x240 (speaker disabled)");
+    Serial.printf("VIDEO NTSC GPIO%d DAC%d RGB332 256x240\n", CompositeVideo::pin, CompositeVideo::pin == 25 ? 1 : 2);
   } else notify("Video allocation/setup FAILED");
   Preferences preferences;
   if (preferences.begin("m5vtx", true)) {
-    controlPin = preferences.getUChar("control-pin", 16);
+    controlPin = preferences.getUChar("control-pin", Board::defaultControlPin);
     sa2PowerOffset = preferences.getUChar("sa2-offset", 0);
     protocolSaved = preferences.isKey("protocol");
     const uint8_t savedProtocol = preferences.getUChar("protocol", static_cast<uint8_t>(VtxProtocol::SmartAudio));
@@ -808,7 +928,7 @@ void setup() {
     preferences.end();
   }
   loadTable();
-  if (controlPin != 16 && controlPin != 17) controlPin = 16;
+  if (!Board::isControlPin(controlPin)) controlPin = Board::defaultControlPin;
   draftControlPin = controlPin;
   draftProtocol = controlProtocol;
   if (sa2PowerOffset > 1) sa2PowerOffset = 0;
@@ -818,8 +938,15 @@ void setup() {
   if (protocolSaved) vtx.begin(controlPin);
   else notify("First-time setup; see README");
   spiBusMutex = xSemaphoreCreateMutex();
+#if M5VTX_HAS_SD
   if (spiBusMutex && CompositeVideo::running()) mediaInitialized = sdVideo.begin(spiBusMutex);
   if (!mediaInitialized) notify("SD player unavailable");
+#endif
+  if (M5.getBoard() != m5Board) {
+    char text[64];
+    snprintf(text, sizeof(text), "Wrong firmware: this is for the %s", Board::name);
+    notify(text);
+  }
   drawScreen();
 }
 
@@ -827,13 +954,11 @@ void loop() {
   M5.update();
   vtx.update();
   readConsole();
-  if (M5.BtnA.wasClicked()) button("a");
-  if (M5.BtnB.wasClicked()) button("b");
-  if (M5.BtnC.wasClicked()) button("c");
-  if (M5.BtnB.wasHold()) button("holdb");
-  if (M5.BtnC.wasHold()) button("holdc");
+  readButtons();
   syncDrafts();
+#if M5VTX_HAS_SD
   syncMedia();
+#endif
   const uint32_t now = millis();
   if ((screenDirty && now - lastScreen > 100) || now - lastScreen > 1000) {
     drawScreen(); lastScreen = now;
